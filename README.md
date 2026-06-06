@@ -166,6 +166,31 @@ class SimpleLFADS(nn.Module): #Упрощённая реализация LFADS �
 
 Из сырых данных: $R^2$ train=0.518, valid=0.437
 
+```
+def decode_behavior(factors_np, behavior_data, train_idx, valid_idx): #Линейное декодирование поведения из латентных факторов
+    # [n_trials, time, dim] -> [n_trials * time, dim]
+    n_time = factors_np.shape[1]
+    
+    X_train = factors_np[train_idx].reshape(-1, factors_np.shape[2])
+    X_valid = factors_np[valid_idx].reshape(-1, factors_np.shape[2])
+    
+    y_train = behavior_data[train_idx].reshape(-1)
+    y_valid = behavior_data[valid_idx].reshape(-1)
+    
+    # Ridge regression
+    reg = Ridge(alpha=1.0)
+    reg.fit(X_train, y_train)
+    
+    y_pred_train = reg.predict(X_train)
+    y_pred_valid = reg.predict(X_valid)
+    
+    r2_train = r2_score(y_train, y_pred_train)
+    r2_valid = r2_score(y_valid, y_pred_valid)
+    
+    return r2_train, r2_valid, y_pred_valid, y_valid
+```
+
+
 По сути получился нелинейный PCA, а не динамическая система. В PCA латентного пространства два изолированных кластера вместо непрерывной траектории
 
 
