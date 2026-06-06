@@ -453,7 +453,7 @@ class CoordinatedDropout(nn.Module):
         return x * mask / (1 - self.rate), mask
 
 
-class FullLFADS(nn.Module):
+class LFADS(nn.Module):
     """
     Полная архитектура LFADS с контроллером.
     
