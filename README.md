@@ -247,6 +247,148 @@ def decode_behavior(factors_np, behavior_data, train_idx, valid_idx): #Лине�
 5. Правильная сборка непрерывных факторов
 6. Per-neuron noise model
 
+```
+class CoordinatedDropout(nn.Module):
+    """
+    Coordinated Dropout регуляризатор LFADS
+    
+    Обнуляет одни и те же нейроны на ВХОДЕ энкодера, но оставляет их на ВЫХОДЕ (в reconstruction target). Это заставляет модель реконструировать активность нейронов, которых она не видела т.е. выучивать популяционную динамику, а не identity mapping.
+    """
+    def __init__(self, rate=0.3):
+        super().__init__()
+        self.rate = rate
+    
+    def forward(self, x):
+        """x: [batch, time, neurons]. Returns: masked_x, mask"""
+        if not self.training or self.rate == 0:
+            return x, torch.ones_like(x)
+        
+        # Маска одинакова для всех timesteps (координированный dropout)
+        batch, time, neurons = x.shape
+        mask = (torch.rand(batch, 1, neurons, device=x.device) > self.rate).float()
+        mask = mask.expand_as(x)
+        
+        # Масштабирование для сохранения ожидаемого значения
+        masked_x = x * mask / (1 - self.rate)
+        return masked_x, mask
+
+
+class LFADS(nn.Module):
+    def __init__(self, n_neurons, ic_enc_dim=128, ic_dim=64,
+                 gen_dim=200, fac_dim=30, cd_rate=0.3, dropout=0.1):
+        super().__init__()
+        
+        self.n_neurons = n_neurons
+        self.ic_dim = ic_dim
+        self.gen_dim = gen_dim
+        self.fac_dim = fac_dim
+        
+        # Coordinated dropout
+        self.cd = CoordinatedDropout(rate=cd_rate)
+        
+        #ЭНКОДЕР
+        self.encoder = nn.GRU(
+            input_size=n_neurons,
+            hidden_size=ic_enc_dim,
+            bidirectional=True,
+            batch_first=True,
+            num_layers=1
+        )
+        self.enc_ln = nn.LayerNorm(ic_enc_dim * 2)
+        self.ic_mean = nn.Linear(ic_enc_dim * 2, ic_dim)
+        self.ic_logvar = nn.Linear(ic_enc_dim * 2, ic_dim)
+        
+        # Инициализация logvar чтобы начинать с маленькой дисперсии
+        nn.init.constant_(self.ic_logvar.bias, -3.0)
+        nn.init.zeros_(self.ic_logvar.weight)
+        
+        #ГЕНЕРАТОР
+        self.ic_to_gen = nn.Linear(ic_dim, gen_dim)
+        self.generator = nn.GRUCell(input_size=1, hidden_size=gen_dim)  # минимальный вход
+        self.gen_to_fac = nn.Sequential(
+            nn.Linear(gen_dim, fac_dim),
+            nn.Tanh()  # ограничиваем диапазон факторов
+        )
+        
+        #ДЕКОДЕР
+        self.fac_to_rate = nn.Linear(fac_dim, n_neurons)
+        # Per-neuron noise (learned)
+        self.log_noise = nn.Parameter(torch.zeros(n_neurons))
+        
+        self.dropout = nn.Dropout(dropout)
+    
+    def encode(self, x):
+        output, h = self.encoder(x)
+        h = torch.cat([h[0], h[1]], dim=-1)
+        h = self.enc_ln(h)
+        return self.ic_mean(h), self.ic_logvar(h)
+    
+    def reparameterize(self, mean, logvar):
+        if self.training:
+            std = torch.exp(0.5 * logvar)
+            return mean + std * torch.randn_like(std)
+        return mean  # при eval не добавляем шум
+    
+    def decode(self, g0, seq_len):
+        batch_size = g0.shape[0]
+        gen_state = torch.tanh(self.ic_to_gen(g0))
+        
+        dummy_input = torch.zeros(batch_size, 1, device=g0.device)
+        
+        factors_list = []
+        rates_list = []
+        
+        for t in range(seq_len):
+            gen_state = self.generator(dummy_input, gen_state)
+            fac = self.gen_to_fac(gen_state)
+            rate = self.fac_to_rate(self.dropout(fac))
+            
+            factors_list.append(fac)
+            rates_list.append(rate)
+        
+        factors = torch.stack(factors_list, dim=1)
+        rates = torch.stack(rates_list, dim=1)
+        return factors, rates
+    
+    def forward(self, x):
+        seq_len = x.shape[1]
+        
+        # Coordinated dropout на входе энкодера
+        x_masked, cd_mask = self.cd(x)
+        
+        ic_mean, ic_logvar = self.encode(x_masked)
+        g0 = self.reparameterize(ic_mean, ic_logvar)
+        factors, rates = self.decode(g0, seq_len)
+        
+        return rates, factors, ic_mean, ic_logvar, cd_mask
+    
+    def loss(self, x, kl_weight=1.0):
+        rates, factors, ic_mean, ic_logvar, cd_mask = self.forward(x)
+        
+        noise_std = torch.exp(self.log_noise).clamp(min=0.01, max=10.0)
+        
+        # Reconstruction: Gaussian NLL, нормализованный по размерности
+        n_elements = x.shape[0] * x.shape[1] * x.shape[2]
+        recon_loss = 0.5 * torch.sum(
+            ((x - rates) / noise_std) ** 2 + 2 * torch.log(noise_std)
+        ) / n_elements
+        
+        # KL, нормализованный по batch
+        kl_loss = -0.5 * torch.mean(
+            1 + ic_logvar - ic_mean.pow(2) - ic_logvar.exp()
+        )
+        
+        total = recon_loss + kl_weight * kl_loss
+        return total, recon_loss, kl_loss, factors
+    
+    @torch.no_grad()
+    def extract_factors(self, x): #Извлечение факторов в eval-режиме (без dropout и шума)
+        self.eval()
+        rates, factors, ic_mean, ic_logvar, _ = self.forward(x)
+        return factors.cpu().numpy(), rates.cpu().numpy(), ic_mean.cpu().numpy()
+```
+
+
 ### Результаты
 
 **Переобучение устранено.** Train loss (~0.28) стал *выше* valid (~0.26). То есть получился результат обратный к версии 1 (это хорошо): coordinated dropout делает задачу при обучении сложнее (часть нейронов замаскирована), а при валидации маскировки нет, значит loss ниже.
