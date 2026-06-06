@@ -435,6 +435,195 @@ class LFADS(nn.Module):
 
 Inferred inputs это вариационные: контроллер выдаёт mean и logvar, из которых сэмплируется $u_t$. KL штрафует отклонение от N(0,1), заставляя контроллер передавать только необходимую информацию.
 
+
+<details> <summary>Показать код</summary>
+
+```py
+class CoordinatedDropout(nn.Module):
+    def __init__(self, rate=0.3):
+        super().__init__()
+        self.rate = rate
+    
+    def forward(self, x):
+        if not self.training or self.rate == 0:
+            return x, torch.ones_like(x)
+        batch, time, neurons = x.shape
+        mask = (torch.rand(batch, 1, neurons, device=x.device) > self.rate).float()
+        mask = mask.expand_as(x)
+        return x * mask / (1 - self.rate), mask
+
+
+class FullLFADS(nn.Module):
+    """
+    Полная архитектура LFADS с контроллером.
+    
+    Соответствие статье (Pandarinath et al. 2018, Fig. 1):
+    - IC encoder (bi-GRU) → начальное условие g₀
+    - CI encoder (bi-GRU) → временные входы для контроллера  
+    - Controller (forward GRU) → inferred inputs uₜ
+    - Generator (forward GRU) → скрытая динамика → факторы fₜ
+    - Readout (linear) → rates для каждого нейрона
+    """
+    def __init__(self, n_neurons, 
+                 ic_enc_dim=128, ci_enc_dim=128,
+                 ic_dim=64, co_dim=4,
+                 gen_dim=200, con_dim=128, fac_dim=30,
+                 cd_rate=0.3, dropout=0.1):
+        super().__init__()
+        
+        self.n_neurons = n_neurons
+        self.ic_dim = ic_dim
+        self.co_dim = co_dim
+        self.gen_dim = gen_dim
+        self.con_dim = con_dim
+        self.fac_dim = fac_dim
+        
+        self.cd = CoordinatedDropout(rate=cd_rate)
+        
+        #IC ЭНКОДЕР: весь трайл → начальное условие
+        self.ic_encoder = nn.GRU(
+            input_size=n_neurons, hidden_size=ic_enc_dim,
+            bidirectional=True, batch_first=True
+        )
+        self.ic_mean = nn.Linear(ic_enc_dim * 2, ic_dim)
+        self.ic_logvar = nn.Linear(ic_enc_dim * 2, ic_dim)
+        nn.init.constant_(self.ic_logvar.bias, -3.0)
+        nn.init.zeros_(self.ic_logvar.weight)
+        
+        #CI ЭНКОДЕР: весь трайл → входы контроллера на каждом шаге
+        self.ci_encoder = nn.GRU(
+            input_size=n_neurons, hidden_size=ci_enc_dim,
+            bidirectional=True, batch_first=True
+        )
+        # CI энкодер выдаёт вектор на каждом шаге t (не только финальный h)
+        
+        #КОНТРОЛЛЕР: ci_output + факторы → inferred input u_t
+        self.controller = nn.GRUCell(
+            input_size=ci_enc_dim * 2 + fac_dim,  # CI output + предыдущие факторы
+            hidden_size=con_dim
+        )
+        # Контроллер тоже вариационный: выдаёт mean и logvar для u_t
+        self.co_mean = nn.Linear(con_dim, co_dim)
+        self.co_logvar = nn.Linear(con_dim, co_dim)
+        nn.init.constant_(self.co_logvar.bias, -3.0)
+        nn.init.zeros_(self.co_logvar.weight)
+        
+        #ГЕНЕРАТОР: g₀ + u_t → динамика → факторы
+        self.ic_to_gen = nn.Linear(ic_dim, gen_dim)
+        self.generator = nn.GRUCell(
+            input_size=co_dim,  # вход = inferred inputs от контроллера
+            hidden_size=gen_dim
+        )
+        self.gen_to_fac = nn.Linear(gen_dim, fac_dim)
+        
+        #ДЕКОДЕР
+        self.fac_to_rate = nn.Linear(fac_dim, n_neurons)
+        self.log_noise = nn.Parameter(torch.zeros(n_neurons))
+        
+        self.dropout = nn.Dropout(dropout)
+    
+    def encode(self, x_masked):
+        # IC encoder → финальные hidden states → g₀
+        _, h_ic = self.ic_encoder(x_masked)
+        h_ic = torch.cat([h_ic[0], h_ic[1]], dim=-1)
+        ic_mean = self.ic_mean(h_ic)
+        ic_logvar = self.ic_logvar(h_ic)
+        
+        # CI encoder → output на каждом шаге → входы контроллера
+        ci_output, _ = self.ci_encoder(x_masked)  # [batch, time, ci_enc_dim*2]
+        
+        return ic_mean, ic_logvar, ci_output
+    
+    def reparameterize(self, mean, logvar):
+        if self.training:
+            std = torch.exp(0.5 * logvar)
+            return mean + std * torch.randn_like(std)
+        return mean
+    
+    def forward(self, x):
+        batch, seq_len, n = x.shape
+        
+        # Coordinated dropout
+        x_masked, cd_mask = self.cd(x)
+        
+        # Encode
+        ic_mean, ic_logvar, ci_output = self.encode(x_masked)
+        g0 = self.reparameterize(ic_mean, ic_logvar)
+        
+        # Инициализация
+        gen_state = torch.tanh(self.ic_to_gen(g0))  # [batch, gen_dim]
+        con_state = torch.zeros(batch, self.con_dim, device=x.device)
+        fac = torch.zeros(batch, self.fac_dim, device=x.device)
+        
+        factors_list = []
+        rates_list = []
+        co_means = []
+        co_logvars = []
+        
+        for t in range(seq_len):
+            # 1. Контроллер: получает CI output + предыдущие факторы
+            con_input = torch.cat([ci_output[:, t, :], fac], dim=-1)
+            con_state = self.controller(con_input, con_state)
+            
+            # 2. Inferred input (вариационный)
+            u_mean = self.co_mean(con_state)
+            u_logvar = self.co_logvar(con_state)
+            u = self.reparameterize(u_mean, u_logvar)
+            
+            co_means.append(u_mean)
+            co_logvars.append(u_logvar)
+            
+            # 3. Генератор: получает inferred input
+            gen_state = self.generator(u, gen_state)
+            
+            # 4. Факторы и rates
+            fac = self.gen_to_fac(gen_state)
+            rate = self.fac_to_rate(self.dropout(fac))
+            
+            factors_list.append(fac)
+            rates_list.append(rate)
+        
+        factors = torch.stack(factors_list, dim=1)    # [batch, time, fac_dim]
+        rates = torch.stack(rates_list, dim=1)        # [batch, time, neurons]
+        co_means = torch.stack(co_means, dim=1)       # [batch, time, co_dim]
+        co_logvars = torch.stack(co_logvars, dim=1)   # [batch, time, co_dim]
+        
+        return rates, factors, ic_mean, ic_logvar, co_means, co_logvars
+    
+    def loss(self, x, kl_ic_weight=1.0, kl_co_weight=1.0):
+        rates, factors, ic_mean, ic_logvar, co_means, co_logvars = self.forward(x)
+        
+        noise_std = torch.exp(self.log_noise).clamp(min=0.01, max=10.0)
+        n_elements = x.shape[0] * x.shape[1] * x.shape[2]
+        
+        # Reconstruction
+        recon_loss = 0.5 * torch.sum(
+            ((x - rates) / noise_std) ** 2 + 2 * torch.log(noise_std)
+        ) / n_elements
+        
+        # KL для начальных условий (IC)
+        kl_ic = -0.5 * torch.mean(1 + ic_logvar - ic_mean.pow(2) - ic_logvar.exp())
+        
+        # KL для inferred inputs (CO) суммируется по времени
+        kl_co = -0.5 * torch.mean(1 + co_logvars - co_means.pow(2) - co_logvars.exp())
+        
+        total = recon_loss + kl_ic_weight * kl_ic + kl_co_weight * kl_co
+        
+        return total, recon_loss, kl_ic, kl_co, factors
+    
+    @torch.no_grad()
+    def extract_factors(self, x):
+        self.eval()
+        rates, factors, _, _, co_means, _ = self.forward(x)
+        return (
+            factors.cpu().numpy(), 
+            rates.cpu().numpy(),
+            co_means.cpu().numpy()  # inferred inputs тоже интересны
+        )
+```
+
+</details>
+
 ### Результаты
 
 ![3](images/v3обучение.png)
