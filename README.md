@@ -19,7 +19,7 @@
 ----
 ## Некоторые формулы которые могу понадобиться
 
-*Reconstruction loss* отрицательный Gaussian log-likelihood:
+**Reconstruction loss** отрицательный Gaussian log-likelihood:
 
 $$
 -\log p(x|r) = \frac{1}{2}\sum_{t,n}\left[\frac{(x_{t,n}-r_{t,n})^2}{\sigma_n^2} + 2\log\sigma_n\right]
