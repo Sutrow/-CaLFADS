@@ -520,7 +520,7 @@ u  3      -0.066       0.007       0.047      -0.035
 ---
 
 
-```
+
 ## Сводная таблица всех версий
 
 | | v1 | v2 | v3 | v4 | v5 | v6 | v7 |
@@ -536,7 +536,7 @@ u  3      -0.066       0.007       0.047      -0.035
 | Медиана corr | - | - | 0.63 | 0.63 | 0.79 | 0.75 | ? |
 | fac vs PCA | - | - | fac>PCA | fac>PCA | fac<PCA | fac<PCA | fac>PCA(?) |
 | rate vs Raw | - | - | rate<Raw | rate<Raw | rate>Raw | rate>Raw | rate>Raw(?) |
-```
+
 
 ---
 
