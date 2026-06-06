@@ -247,7 +247,7 @@ def decode_behavior(factors_np, behavior_data, train_idx, valid_idx): #Лине�
 5. Правильная сборка непрерывных факторов
 6. Per-neuron noise model
 
-```
+```py
 class CoordinatedDropout(nn.Module):
     """
     Coordinated Dropout регуляризатор LFADS
