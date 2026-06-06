@@ -249,6 +249,8 @@ def decode_behavior(factors_np, behavior_data, train_idx, valid_idx): #Лине�
 5. Правильная сборка непрерывных факторов
 6. Per-neuron noise model
 
+<details> <summary>Показать код</summary>
+
 ```py
 class CoordinatedDropout(nn.Module):
     """
@@ -390,6 +392,7 @@ class LFADS(nn.Module):
         return factors.cpu().numpy(), rates.cpu().numpy(), ic_mean.cpu().numpy()
 ```
 
+</details>
 
 ### Результаты
 
