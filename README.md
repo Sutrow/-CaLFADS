@@ -57,6 +57,7 @@ $$
 
 Данные нормализованы min-max на [0,1]. Нарезаны на 177 сегментов по 200 кадров (10 секунд) с перекрытием 50%. Обучение 1000 эпох.
 
+<details> <summary>Показать код</summary>
 
 ```py
 import torch
@@ -174,6 +175,7 @@ class SimpleLFADS(nn.Module): #Упрощённая реализация LFADS �
         
         return total_loss, recon_loss, kl_loss, factors
 ```
+</details>
 
 ### Результаты
 
