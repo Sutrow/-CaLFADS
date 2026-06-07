@@ -864,7 +864,161 @@ u  7      -0.030      -0.007       0.008      -0.003      -0.027
 
 3. **Обрезка краёв (edge trimming):** первые и последние 15 кадров каждого сегмента исключаются из функции потерь. Модель всё равно обрабатывает их (генератору нужен разгон), но не штрафуется за плохое предсказание в этой зоне.
 
-4. **Больше факторов и больший контроллер:** 50 факторов (было 30), 8-мерный выход контроллера (было 4).
+4. **Больше факторов и больший контроллер:** 50 факторов (было 30), 8-мерный выход контроллера (было 4)
+
+
+<details> <summary>Показать код</summary>
+
+```py
+class LFADS(nn.Module):
+    def __init__(self, n_neurons,
+                 ic_enc_dim=128, ci_enc_dim=128,
+                 ic_dim=64, co_dim=8,
+                 gen_dim=200, con_dim=128, fac_dim=50,
+                 cd_rate=0.3, dropout=0.05):
+        super().__init__()
+        
+        self.n_neurons = n_neurons
+        self.ic_dim = ic_dim
+        self.co_dim = co_dim
+        self.gen_dim = gen_dim
+        self.con_dim = con_dim
+        self.fac_dim = fac_dim
+        
+        self.cd = CoordinatedDropout(rate=cd_rate)
+        
+        # IC Encoder
+        self.ic_encoder = nn.GRU(
+            input_size=n_neurons, hidden_size=ic_enc_dim,
+            bidirectional=True, batch_first=True
+        )
+        self.ic_mean = nn.Linear(ic_enc_dim * 2, ic_dim)
+        self.ic_logvar = nn.Linear(ic_enc_dim * 2, ic_dim)
+        nn.init.constant_(self.ic_logvar.bias, -3.0)
+        nn.init.zeros_(self.ic_logvar.weight)
+        
+        # CI Encoder
+        self.ci_encoder = nn.GRU(
+            input_size=n_neurons, hidden_size=ci_enc_dim,
+            bidirectional=True, batch_first=True
+        )
+        
+        # КОНТРОЛЛЕР
+        self.controller = nn.GRUCell(
+            input_size=ci_enc_dim * 2 + fac_dim,
+            hidden_size=con_dim
+        )
+        self.co_mean = nn.Linear(con_dim, co_dim)
+        self.co_logvar = nn.Linear(con_dim, co_dim)
+        nn.init.constant_(self.co_logvar.bias, -3.0)
+        nn.init.zeros_(self.co_logvar.weight)
+        
+        # ГЕНЕРАТОР
+        self.ic_to_gen = nn.Linear(ic_dim, gen_dim)
+        self.generator = nn.GRUCell(input_size=co_dim, hidden_size=gen_dim)
+        self.gen_to_fac = nn.Linear(gen_dim, fac_dim)
+        
+        # ДЕКОДЕР: нелинейный MLP + per-neuron baseline
+        self.baseline = nn.Parameter(torch.zeros(n_neurons))  # learned baseline
+        self.decoder = nn.Sequential(
+            nn.Linear(fac_dim, fac_dim * 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(fac_dim * 2, n_neurons)
+        )
+        self.log_noise = nn.Parameter(torch.zeros(n_neurons))
+        
+        self._dropout = nn.Dropout(dropout)
+    
+    def encode(self, x_masked):
+        _, h_ic = self.ic_encoder(x_masked)
+        h_ic = torch.cat([h_ic[0], h_ic[1]], dim=-1)
+        ic_mean = self.ic_mean(h_ic)
+        ic_logvar = self.ic_logvar(h_ic)
+        ci_output, _ = self.ci_encoder(x_masked)
+        return ic_mean, ic_logvar, ci_output
+    
+    def reparameterize(self, mean, logvar):
+        if self.training:
+            return mean + torch.exp(0.5 * logvar) * torch.randn_like(logvar)
+        return mean
+    
+    def forward(self, x):
+        batch, seq_len, n = x.shape
+        x_masked, cd_mask = self.cd(x)
+        ic_mean, ic_logvar, ci_output = self.encode(x_masked)
+        g0 = self.reparameterize(ic_mean, ic_logvar)
+        
+        gen_state = torch.tanh(self.ic_to_gen(g0))
+        con_state = torch.zeros(batch, self.con_dim, device=x.device)
+        fac = torch.zeros(batch, self.fac_dim, device=x.device)
+        
+        factors_list, rates_list = [], []
+        co_means, co_logvars = [], []
+        
+        for t in range(seq_len):
+            con_input = torch.cat([ci_output[:, t, :], fac], dim=-1)
+            con_state = self.controller(con_input, con_state)
+            u_mean = self.co_mean(con_state)
+            u_logvar = self.co_logvar(con_state)
+            u = self.reparameterize(u_mean, u_logvar)
+            co_means.append(u_mean)
+            co_logvars.append(u_logvar)
+            
+            gen_state = self.generator(u, gen_state)
+            fac = self.gen_to_fac(gen_state)
+            
+            # Нелинейный декодер + baseline
+            rate = self.decoder(fac) + self.baseline
+            
+            factors_list.append(fac)
+            rates_list.append(rate)
+        
+        factors = torch.stack(factors_list, dim=1)
+        rates = torch.stack(rates_list, dim=1)
+        co_means = torch.stack(co_means, dim=1)
+        co_logvars = torch.stack(co_logvars, dim=1)
+        
+        return rates, factors, ic_mean, ic_logvar, co_means, co_logvars
+    
+    def loss(self, x, kl_ic_weight=1.0, kl_co_weight=1.0, edge_trim=15):
+        rates, factors, ic_mean, ic_logvar, co_means, co_logvars = self.forward(x)
+        
+        noise_std = torch.exp(self.log_noise).clamp(min=0.01, max=10.0)
+        
+        # Обрезаем edge effects: игнорируем первые и последние edge_trim кадров
+        if edge_trim > 0:
+            x_trim = x[:, edge_trim:-edge_trim, :]
+            rates_trim = rates[:, edge_trim:-edge_trim, :]
+        else:
+            x_trim = x
+            rates_trim = rates
+        
+        n_elements = x_trim.shape[0] * x_trim.shape[1] * x_trim.shape[2]
+        
+        recon_loss = 0.5 * torch.sum(((x_trim - rates_trim) / noise_std) ** 2 + 2 * torch.log(noise_std)) / n_elements
+        
+        kl_ic = -0.5 * torch.mean(1 + ic_logvar - ic_mean.pow(2) - ic_logvar.exp())
+        
+        # KL для CO: тоже обрезаем edges
+        if edge_trim > 0:
+            co_m = co_means[:, edge_trim:-edge_trim, :]
+            co_lv = co_logvars[:, edge_trim:-edge_trim, :]
+        else:
+            co_m, co_lv = co_means, co_logvars
+        kl_co = -0.5 * torch.mean(1 + co_lv - co_m.pow(2) - co_lv.exp())
+        
+        total = recon_loss + kl_ic_weight * kl_ic + kl_co_weight * kl_co
+        return total, recon_loss, kl_ic, kl_co, factors
+    
+    @torch.no_grad()
+    def extract_factors(self, x):
+        self.eval()
+        rates, factors, _, _, co_means, _ = self.forward(x)
+        return factors.cpu().numpy(), rates.cpu().numpy(), co_means.cpu().numpy()
+```
+
+</details>
 
 ### Результаты
 
