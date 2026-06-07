@@ -1058,7 +1058,7 @@ Ep 1000: valid=-0.0080 recon=-0.0117 kl_ic=0.0084 kl_co=3.3082 noise=[0.199,0.95
 Ep 1200: valid=-0.0150 recon=-0.0185 kl_ic=0.0053 kl_co=3.2556 noise=[0.182,0.950] baseline=[-0.355,0.237]
 Ep 1400: valid=-0.0283 recon=-0.0316 kl_ic=0.0022 kl_co=3.1626 noise=[0.167,0.950] baseline=[-0.392,0.256]
 Ep 1600: valid=-0.0340 recon=-0.0372 kl_ic=0.0010 kl_co=3.1333 noise=[0.164,0.950] baseline=[-0.409,0.259]
-Ep 1800: valid=-0.0367 recon=-0.0399 **kl_ic=0.0005 kl_co=3.1184** noise=[0.163,0.950] baseline=[-0.417,0.258]
+Ep 1800: valid=-0.0367 recon=-0.0399 kl_ic=0.0005* kl_co=3.1184* noise=[0.163,0.950] baseline=[-0.417,0.258]
 
 Лучшая модель: valid=-0.0448
 ```
