@@ -112,7 +112,7 @@ $$
 ### Coordinated Dropout
 
 $$
-\tilde{x}_{t,n} = \begin{cases} \frac{x_{t,n}}{1-p} & \text{если } m_n = 1 \\[4pt] 0 & \text{если } m_n = 0 \end{cases}
+\tilde{x}_{t,n} = \begin{cases} \frac{x_{t,n}}{1-p} & \text{если } m_n = 1 & \text{если } m_n = 0 \end{cases}
 $$
 
 - $m_n \sim \text{Bernoulli}(1-p)$ — маска для нейрона $n$ (одна и та же на всех кадрах $t$)
