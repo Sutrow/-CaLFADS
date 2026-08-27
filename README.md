@@ -91,8 +91,8 @@ $$
 
 Для каждого сегмента энкодер выдаёт не фиксированный вектор, а *распределение* $q(g_0|x) = \mathcal{N}(\mu, \sigma^2)$. KL измеряет, насколько это распределение отличается от стандартного нормального $\mathcal{N}(0, 1)$.
 
-Если $\mu \approx 0$ и $\sigma \approx 1$ → KL ≈ 0 → IC не несёт информации (posterior collapse).
-Если $\mu$ далеко от 0 или $\sigma$ мало → KL большой → IC кодирует много информации о сегменте.
+Если $\mu \approx 0$ и $\sigma \approx 1$ -> KL ≈ 0 -> IC не несёт информации (posterior collapse).
+Если $\mu$ далеко от 0 или $\sigma$ мало -> KL большой -> IC кодирует много информации о сегменте.
 
 
 ### KL-дивергенция для контроллера (KL_co)
@@ -135,7 +135,7 @@ $$
 | `ci_enc_dim` | 64 | Размер скрытого состояния CI-энкодера (вход контроллера). Меньше IC-энкодера, чтобы ограничить пропускную способность контроллера |
 | `ic_dim` | 64 | Размерность начальных условий $g_0$. Из этого вектора генератор стартует. Вся информация о «типе» сегмента должна поместиться в 64 числа |
 | `co_dim` | 4 | Размерность выхода контроллера $u_t$. Сколько чисел контроллер может передать генератору на каждом кадре. 2 — мало (v6, контроллер молчит), 8 — много (v5, контроллер делает всё), 4 — компромисс (v7) |
-| `gen_dim` | 200 | Размер скрытого состояния генератора (GRU). Самый большой компонент — здесь живёт динамическая система |
+| `gen_dim` | 200 | Размер скрытого состояния генератора (GRU). Самый большой компонент здесь живёт динамическая система |
 | `con_dim` | 64 | Размер скрытого состояния контроллера (GRU). Определяет «вычислительную мощность» контроллера |
 | `fac_dim` | 30–50 | Число латентных факторов. Главный выход модели — низкоразмерное описание состояния популяции на каждом кадре |
 
@@ -143,8 +143,8 @@ $$
 
 | Параметр | Значение | Что означает |
 |---|---|---|
-| `kl_ic_max` | 0.05–0.1 | Максимальный вес KL-штрафа на начальные условия. Определяет, насколько сильно модель наказывается за использование IC. Высокий → IC коллапсирует, низкий → IC переобучается |
-| `kl_co_max` | 0.001–0.1 | Максимальный вес KL-штрафа на контроллер. Ключевой гиперпараметр, определяющий баланс IC/контроллер. 0.001 → контроллер свободен (v5), 0.1 → контроллер молчит (v6), 0.01 → баланс (v7) |
+| `kl_ic_max` | 0.05–0.1 | Максимальный вес KL-штрафа на начальные условия. Определяет, насколько сильно модель наказывается за использование IC. Высокий -> IC коллапсирует, низкий -> IC переобучается |
+| `kl_co_max` | 0.001–0.1 | Максимальный вес KL-штрафа на контроллер. Ключевой гиперпараметр, определяющий баланс IC/контроллер. 0.001 -> контроллер свободен (v5), 0.1 -> контроллер молчит (v6), 0.01 -> баланс (v7) |
 | `ic_min_kl` | 0.1 | Порог free bits для IC. KL каждой размерности IC не может быть ниже этого значения в функции потерь |
 
 ### Разогрев (warm-up)
@@ -162,7 +162,7 @@ $$
 
 | Параметр | Значение | Что означает |
 |---|---|---|
-| `cd_rate` | 0.3 | Coordinated Dropout: доля замаскированных нейронов на входе. 0 → нет маскировки (модель находит тривиальное решение), 0.3 → маскируется ~75 нейронов из 249 |
+| `cd_rate` | 0.3 | Coordinated Dropout: доля замаскированных нейронов на входе. 0 -> нет маскировки (модель находит тривиальное решение), 0.3 -> маскируется ~75 нейронов из 249 |
 | `edge_trim` | 15 | Число кадров, обрезаемых с каждой стороны сегмента (переходный процесс генератора). Из 100 кадров в loss попадают кадры 15–85 |
 | `dropout` | 0.05 | Обычный dropout в декодере |
 
@@ -204,7 +204,7 @@ class SimpleLFADS(nn.Module): #Упрощённая реализация LFADS �
         # Bi-directional GRU читает весь трайл и выдаёт начальное условие
         self.encoder = nn.GRU(input_size=n_neurons, hidden_size=ic_enc_dim, bidirectional=True, batch_first=True)
         
-        # Из выхода энкодера → параметры нормального распределения для g0
+        # Из выхода энкодера -> параметры нормального распределения для g0
         self.ic_mean = nn.Linear(ic_enc_dim * 2, ic_dim)
         self.ic_logvar = nn.Linear(ic_enc_dim * 2, ic_dim)
         
@@ -228,7 +228,7 @@ class SimpleLFADS(nn.Module): #Упрощённая реализация LFADS �
         self.dropout = nn.Dropout(dropout)
     
     def encode(self, x):
-        """x: [batch, time, neurons] → g0_mean, g0_logvar: [batch, ic_dim]"""
+        """x: [batch, time, neurons] -> g0_mean, g0_logvar: [batch, ic_dim]"""
         _, h = self.encoder(x)  # h: [2, batch, ic_enc_dim]
         h = torch.cat([h[0], h[1]], dim=-1)  # [batch, ic_enc_dim*2]
         return self.ic_mean(h), self.ic_logvar(h)
@@ -544,7 +544,7 @@ class LFADS(nn.Module):
 
 ![3](images/v2декодирование.png)
 
-**Корреляция факторов с поведением** показывает осмысленную структуру: разные факторы кодируют разные переменные (Factor 7 → позиция X, Factor 21 → локомоция, Factor 28 → позиция Y).
+**Корреляция факторов с поведением** показывает осмысленную структуру: разные факторы кодируют разные переменные (Factor 7 -> позиция X, Factor 21 -> локомоция, Factor 28 -> позиция Y).
 
 ![3](images/v2корреляции.png)
 
@@ -591,11 +591,11 @@ class LFADS(nn.Module):
     Полная архитектура LFADS с контроллером.
     
     Соответствие статье (Pandarinath et al. 2018, Fig. 1):
-    - IC encoder (bi-GRU) → начальное условие g₀
-    - CI encoder (bi-GRU) → временные входы для контроллера  
-    - Controller (forward GRU) → inferred inputs uₜ
-    - Generator (forward GRU) → скрытая динамика → факторы fₜ
-    - Readout (linear) → rates для каждого нейрона
+    - IC encoder (bi-GRU) -> начальное условие g₀
+    - CI encoder (bi-GRU) -> временные входы для контроллера  
+    - Controller (forward GRU) -> inferred inputs uₜ
+    - Generator (forward GRU) -> скрытая динамика -> факторы fₜ
+    - Readout (linear) -> rates для каждого нейрона
     """
     def __init__(self, n_neurons, 
                  ic_enc_dim=128, ci_enc_dim=128,
@@ -613,7 +613,7 @@ class LFADS(nn.Module):
         
         self.cd = CoordinatedDropout(rate=cd_rate)
         
-        #IC ЭНКОДЕР: весь трайл → начальное условие
+        #IC ЭНКОДЕР: весь трайл -> начальное условие
         self.ic_encoder = nn.GRU(
             input_size=n_neurons, hidden_size=ic_enc_dim,
             bidirectional=True, batch_first=True
@@ -623,14 +623,14 @@ class LFADS(nn.Module):
         nn.init.constant_(self.ic_logvar.bias, -3.0)
         nn.init.zeros_(self.ic_logvar.weight)
         
-        #CI ЭНКОДЕР: весь трайл → входы контроллера на каждом шаге
+        #CI ЭНКОДЕР: весь трайл -> входы контроллера на каждом шаге
         self.ci_encoder = nn.GRU(
             input_size=n_neurons, hidden_size=ci_enc_dim,
             bidirectional=True, batch_first=True
         )
         # CI энкодер выдаёт вектор на каждом шаге t (не только финальный h)
         
-        #КОНТРОЛЛЕР: ci_output + факторы → inferred input u_t
+        #КОНТРОЛЛЕР: ci_output + факторы -> inferred input u_t
         self.controller = nn.GRUCell(
             input_size=ci_enc_dim * 2 + fac_dim,  # CI output + предыдущие факторы
             hidden_size=con_dim
@@ -641,7 +641,7 @@ class LFADS(nn.Module):
         nn.init.constant_(self.co_logvar.bias, -3.0)
         nn.init.zeros_(self.co_logvar.weight)
         
-        #ГЕНЕРАТОР: g₀ + u_t → динамика → факторы
+        #ГЕНЕРАТОР: g₀ + u_t -> динамика -> факторы
         self.ic_to_gen = nn.Linear(ic_dim, gen_dim)
         self.generator = nn.GRUCell(
             input_size=co_dim,  # вход = inferred inputs от контроллера
@@ -656,13 +656,13 @@ class LFADS(nn.Module):
         self.dropout = nn.Dropout(dropout)
     
     def encode(self, x_masked):
-        # IC encoder → финальные hidden states → g₀
+        # IC encoder -> финальные hidden states -> g₀
         _, h_ic = self.ic_encoder(x_masked)
         h_ic = torch.cat([h_ic[0], h_ic[1]], dim=-1)
         ic_mean = self.ic_mean(h_ic)
         ic_logvar = self.ic_logvar(h_ic)
         
-        # CI encoder → output на каждом шаге → входы контроллера
+        # CI encoder -> output на каждом шаге -> входы контроллера
         ci_output, _ = self.ci_encoder(x_masked)  # [batch, time, ci_enc_dim*2]
         
         return ic_mean, ic_logvar, ci_output
